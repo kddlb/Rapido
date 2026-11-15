@@ -6,7 +6,20 @@ use gpui_kit::{AssetSource, Result, SharedString};
 
 gpui_kit::assets::icon_assets!(
     pub ExtraIcons,
-    [Archive, Trash, Mail, MailOpen, FolderInput, Flag, FlagOff, LogOut, WifiOff, Send]
+    [
+        Archive,
+        Trash,
+        Mail,
+        MailOpen,
+        FolderInput,
+        Flag,
+        FlagOff,
+        LogOut,
+        WifiOff,
+        Send,
+        Paperclip,
+        SquareArrowOutUpRight,
+    ]
 );
 
 pub struct AppAssets;

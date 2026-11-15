@@ -75,14 +75,14 @@ impl RapidoRoot {
     }
 
     fn show_mail(&mut self, account: Arc<Account>, window: &mut Window, cx: &mut Context<Self>) {
-        window.set_window_title(&format!("Rapido — {}", account.username()));
+        window.set_window_title(&format!("Rápido — {}", account.username()));
         let view = cx.new(|cx| MailView::new(account, window, cx));
         let sub = cx.subscribe_in(
             &view,
             window,
             |this, _, ev: &MailEvent, window, cx| match ev {
                 MailEvent::SignedOut { session_url } => {
-                    window.set_window_title("Rapido");
+                    window.set_window_title("Rápido");
                     this.show_setup(Some(session_url.clone()), None, window, cx)
                 }
             },

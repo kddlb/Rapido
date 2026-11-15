@@ -50,6 +50,91 @@ pub fn find_links(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
         .collect()
 }
 
+/// Build the minimal HTML the selectable reader renders: escaped text, one
+/// `<p>` per paragraph, `<br>` per line, indentation and runs of spaces kept as
+/// no-break spaces, and `links` (byte ranges into `text`) as anchors.
+pub fn to_view_html(text: &str, links: &[(std::ops::Range<usize>, String)]) -> String {
+    let mut out = String::with_capacity(text.len() + text.len() / 8);
+    out.push_str("<p>");
+    let mut pos = 0;
+    let mut links = links.iter().peekable();
+    let mut at_line_start = true;
+    let mut prev_space = false;
+    let mut newlines = 0usize;
+    while pos < text.len() {
+        if let Some((range, url)) = links.peek()
+            && range.start == pos
+        {
+            flush_newlines(&mut out, &mut newlines);
+            out.push_str("<a href=\"");
+            escape_into(&mut out, url);
+            out.push_str("\">");
+            escape_into(&mut out, &text[range.clone()]);
+            out.push_str("</a>");
+            pos = range.end;
+            links.next();
+            at_line_start = false;
+            prev_space = false;
+            continue;
+        }
+        let c = text[pos..].chars().next().expect("in bounds");
+        pos += c.len_utf8();
+        match c {
+            '\n' => {
+                newlines += 1;
+                at_line_start = true;
+                prev_space = false;
+            }
+            ' ' => {
+                flush_newlines(&mut out, &mut newlines);
+                out.push(if at_line_start || prev_space {
+                    '\u{a0}'
+                } else {
+                    ' '
+                });
+                prev_space = true;
+            }
+            '\t' => {
+                flush_newlines(&mut out, &mut newlines);
+                out.push_str("\u{a0}\u{a0}\u{a0}\u{a0}");
+                prev_space = true;
+            }
+            c => {
+                flush_newlines(&mut out, &mut newlines);
+                escape_char(&mut out, c);
+                at_line_start = false;
+                prev_space = false;
+            }
+        }
+    }
+    out.push_str("</p>");
+    out
+}
+
+fn flush_newlines(out: &mut String, n: &mut usize) {
+    match *n {
+        0 => {}
+        1 => out.push_str("<br>"),
+        _ => out.push_str("</p><p>"),
+    }
+    *n = 0;
+}
+
+fn escape_char(out: &mut String, c: char) {
+    match c {
+        '&' => out.push_str("&amp;"),
+        '<' => out.push_str("&lt;"),
+        '>' => out.push_str("&gt;"),
+        '"' => out.push_str("&quot;"),
+        c if c.is_control() => {}
+        c => out.push(c),
+    }
+}
+
+fn escape_into(out: &mut String, s: &str) {
+    s.chars().for_each(|c| escape_char(out, c));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +161,31 @@ mod tests {
             &"see https://example.com/x?y=1. or"[l[0].0.clone()],
             "https://example.com/x?y=1"
         );
+    }
+
+    #[test]
+    fn view_html_escapes_and_links() {
+        let text = "Hi <b>&\n  indented\n\nsee https://x.com/?a=1&b=2 now";
+        let links = find_links(text);
+        let html = to_view_html(text, &links);
+        assert_eq!(
+            html,
+            "<p>Hi &lt;b&gt;&amp;<br>\u{a0}\u{a0}indented</p><p>see \
+             <a href=\"https://x.com/?a=1&amp;b=2\">https://x.com/?a=1&amp;b=2</a> now</p>"
+        );
+    }
+
+    #[test]
+    fn view_html_keeps_runs_of_spaces() {
+        assert_eq!(
+            to_view_html("a  b\tc", &[]),
+            "<p>a \u{a0}b\u{a0}\u{a0}\u{a0}\u{a0}c</p>"
+        );
+        assert_eq!(to_view_html("", &[]), "<p></p>");
+    }
+
+    #[test]
+    fn view_html_drops_control_chars() {
+        assert_eq!(to_view_html("a\u{0}b\u{1b}c", &[]), "<p>abc</p>");
     }
 }

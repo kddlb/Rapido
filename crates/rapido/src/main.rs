@@ -1,11 +1,13 @@
 mod actions;
 mod assets;
+mod attachments;
 mod body_text;
 mod browser_view;
 mod config;
 mod format;
 mod links;
 mod mail;
+mod reader;
 mod root;
 mod services;
 mod setup;
@@ -38,7 +40,7 @@ fn main() {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Rapido".into()),
+                    title: Some("Rápido".into()),
                     ..Default::default()
                 }),
                 window_min_size: Some(size(px(720.), px(420.))),

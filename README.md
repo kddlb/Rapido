@@ -1,4 +1,4 @@
-# Rapido
+# Rápido
 
 A native desktop mail client written in Rust with [GPUI Kit](https://gpui-kit.com), speaking [JMAP](https://jmap.io/spec/) (RFC 8620 / RFC 8621). Fastmail is the first target.
 

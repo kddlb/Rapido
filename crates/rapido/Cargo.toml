@@ -3,7 +3,7 @@ name = "rapido"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Rapido, a native JMAP mail client"
+description = "Rápido, a native JMAP mail client"
 
 [dependencies]
 gpui-kit.workspace = true

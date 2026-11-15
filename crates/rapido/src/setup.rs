@@ -122,10 +122,10 @@ impl Render for SetupView {
                         div()
                             .text_xl()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Sign in to Rapido"),
+                            .child("Sign in to Rápido"),
                     )
                     .child(div().text_sm().text_color(theme.muted_foreground).child(
-                        "Rapido talks JMAP. For Fastmail, create an API token under \
+                        "Rápido talks JMAP. For Fastmail, create an API token under \
                              Settings → Privacy & Security → Manage API tokens, with \
                              access to Email.",
                     ))
