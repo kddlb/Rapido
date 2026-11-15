@@ -1,16 +1,18 @@
 //! The main window: mailbox sidebar, thread list and an embedded reader.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use jmap_proto::Id;
-use jmap_proto::mail::MailboxRole;
+use jmap_proto::mail::{MailboxRole, SearchSnippet};
 use rapido_store::{MailboxRow, PAGE_SIZE, StoreEvent, SyncEngine, ThreadRow, mailbox_tree};
 
 use crate::actions::*;
@@ -24,8 +26,25 @@ pub enum MailEvent {
     SignedOut { session_url: String },
 }
 
+/// An active search: results replace the mailbox list until cleared.
+struct Search {
+    query: String,
+    /// `None` searches all mail.
+    scope: Option<Id>,
+    ids: Vec<Id>,
+    total: Option<u64>,
+    snippets: HashMap<Id, SearchSnippet>,
+    loading: bool,
+    generation: u64,
+}
+
 pub struct MailView {
     account: Arc<Account>,
+    search_input: Entity<InputState>,
+    search_all: bool,
+    search: Option<Search>,
+    search_generation: u64,
+    _subs: Vec<Subscription>,
     focus: FocusHandle,
     mailboxes: Vec<MailboxRow>,
     mailbox: Option<Id>,
@@ -82,10 +101,33 @@ impl MailView {
         let push = services::spawn_abortable(engine.clone().run_push());
 
         let reader = cx.new(|cx| ReaderView::new(engine, false, cx));
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Search mail  (/)")
+                .clean_on_escape()
+        });
+        let subs = vec![cx.subscribe_in(
+            &search_input,
+            window,
+            |this: &mut Self, input, ev: &InputEvent, window, cx| match ev {
+                InputEvent::PressEnter { .. } => this.run_search(window, cx),
+                InputEvent::Change
+                    if input.read(cx).value().trim().is_empty() && this.search.is_some() =>
+                {
+                    this.clear_search(cx)
+                }
+                _ => {}
+            },
+        )];
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         let mut this = Self {
             account,
+            search_input,
+            search_all: true,
+            search: None,
+            search_generation: 0,
+            _subs: subs,
             focus,
             mailboxes: Vec::new(),
             mailbox: None,
@@ -207,11 +249,20 @@ impl MailView {
         };
         let store = self.engine().store().clone();
         let selected_thread = self.selected_row().map(|r| r.thread_id.clone());
-        match store.thread_list(&mb) {
+        let rows = match &self.search {
+            Some(search) => {
+                self.total = search.total;
+                store.thread_rows(&search.ids, None)
+            }
+            None => {
+                self.total = store.query(&mb).ok().flatten().and_then(|q| q.total);
+                store.thread_list(&mb)
+            }
+        };
+        match rows {
             Ok(rows) => self.rows = rows,
             Err(e) => self.status = Some(e.to_string().into()),
         }
-        self.total = store.query(&mb).ok().flatten().and_then(|q| q.total);
         // Keep the same thread selected if it is still listed; otherwise keep the
         // index, so archiving moves on to the next conversation.
         if let Some(t) = selected_thread
@@ -236,6 +287,9 @@ impl MailView {
     }
 
     fn load_more(&mut self, cx: &mut Context<Self>) {
+        if self.search.is_some() {
+            return self.load_more_results(cx);
+        }
         let position = self.cached_len();
         if self.loading_more || !self.total.is_some_and(|t| t > position) {
             return;
@@ -267,7 +321,11 @@ impl MailView {
     /// Point the reader at the selected thread (or nothing).
     fn show_selected(&mut self, cx: &mut Context<Self>) {
         let thread = self.selected_row().map(|r| r.thread_id.clone());
-        let mailbox = self.mailbox.clone();
+        // In an all-mail search there is no "current mailbox" to archive from.
+        let mailbox = match &self.search {
+            Some(s) => s.scope.clone(),
+            None => self.mailbox.clone(),
+        };
         self.reader
             .update(cx, |r, cx| r.set_thread(thread, mailbox, cx));
     }
@@ -286,6 +344,129 @@ impl MailView {
         tracing::warn!("{e:#}");
         self.status = Some(format!("{e:#}").into());
         cx.notify();
+    }
+
+    // ----- search ---------------------------------------------------------
+
+    fn run_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.search_input.read(cx).value().trim().to_string();
+        if query.is_empty() {
+            self.clear_search(cx);
+            return;
+        }
+        let scope = if self.search_all {
+            None
+        } else {
+            self.mailbox.clone()
+        };
+        self.search_generation += 1;
+        let generation = self.search_generation;
+        self.search = Some(Search {
+            query: query.clone(),
+            scope: scope.clone(),
+            ids: Vec::new(),
+            total: None,
+            snippets: HashMap::new(),
+            loading: true,
+            generation,
+        });
+        self.selected = None;
+        self.show_selected(cx);
+        self.reload_rows(cx);
+        self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        // Hand the keyboard back to the list so j/k work on the results.
+        self.focus.focus(window, cx);
+        let engine = self.engine();
+        cx.spawn(async move |this, cx| {
+            let result =
+                services::run(
+                    async move { engine.search(&query, scope.as_ref(), 0, PAGE_SIZE).await },
+                )
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(search) = this.search.as_mut().filter(|s| s.generation == generation)
+                else {
+                    return;
+                };
+                search.loading = false;
+                match result {
+                    Ok(page) => {
+                        search.ids = page.ids;
+                        search.total = page.total;
+                        search.snippets = page.snippets;
+                    }
+                    Err(e) => this.report(e, cx),
+                }
+                this.reload_rows(cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn load_more_results(&mut self, cx: &mut Context<Self>) {
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
+        let position = search.ids.len() as u64;
+        if search.loading || !search.total.is_some_and(|t| t > position) {
+            return;
+        }
+        search.loading = true;
+        let (query, scope, generation) = (
+            search.query.clone(),
+            search.scope.clone(),
+            search.generation,
+        );
+        let engine = self.engine();
+        cx.spawn(async move |this, cx| {
+            let result = services::run(async move {
+                engine
+                    .search(&query, scope.as_ref(), position, PAGE_SIZE)
+                    .await
+            })
+            .await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(search) = this.search.as_mut().filter(|s| s.generation == generation)
+                else {
+                    return;
+                };
+                search.loading = false;
+                match result {
+                    Ok(page) => {
+                        search.ids.truncate(page.position as usize);
+                        search.ids.extend(page.ids);
+                        search.total = page.total;
+                        search.snippets.extend(page.snippets);
+                    }
+                    Err(e) => this.report(e, cx),
+                }
+                this.reload_rows(cx);
+            });
+        })
+        .detach();
+    }
+
+    fn clear_search(&mut self, cx: &mut Context<Self>) {
+        if self.search.take().is_none() {
+            return;
+        }
+        self.selected = None;
+        self.show_selected(cx);
+        self.reload_rows(cx);
+        self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    /// Clear the search box and leave search mode.
+    fn reset_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_input
+            .update(cx, |i, cx| i.set_value("", window, cx));
+        self.clear_search(cx);
+    }
+
+    fn focus_search(&mut self, _: &FocusSearch, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_input.update(cx, |i, cx| i.focus(window, cx));
     }
 
     // ----- actions --------------------------------------------------------
@@ -420,7 +601,10 @@ impl MailView {
                             .child(m.unread_emails.to_string()),
                     )
                 })
-                .on_click(cx.listener(move |this, _, _, cx| this.select_mailbox(id.clone(), cx)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.reset_search(window, cx);
+                    this.select_mailbox(id.clone(), cx)
+                }))
         });
         let offline = self.online == Some(false);
         v_flex()
@@ -484,6 +668,32 @@ impl MailView {
         } else {
             FontWeight::NORMAL
         };
+        // In search results, show the server's highlighted snippets when it has them.
+        let snippet = self
+            .search
+            .as_ref()
+            .and_then(|s| s.snippets.get(&row.email_id));
+        let mark = HighlightStyle {
+            background_color: Some(theme.warning.opacity(0.35)),
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        };
+        let highlighted = |snip: Option<&String>, fallback: &str| -> StyledText {
+            match snip {
+                Some(s) => {
+                    let (text, ranges) = format::snippet_spans(s);
+                    StyledText::new(text).with_highlights(ranges.into_iter().map(|r| (r, mark)))
+                }
+                None => StyledText::new(fallback.to_owned()),
+            }
+        };
+        let subject_text = if row.subject.is_empty() {
+            "(no subject)"
+        } else {
+            row.subject.as_str()
+        };
+        let subject = highlighted(snippet.and_then(|s| s.subject.as_ref()), subject_text);
+        let preview = highlighted(snippet.and_then(|s| s.preview.as_ref()), &row.preview);
         h_flex()
             .id(ix)
             .h(px(ROW_HEIGHT))
@@ -543,19 +753,19 @@ impl MailView {
                                     .child(format::list_date(row.received_at, now)),
                             ),
                     )
-                    .child(div().truncate().text_sm().font_weight(weight).child(
-                        if row.subject.is_empty() {
-                            "(no subject)".to_owned()
-                        } else {
-                            row.subject.clone()
-                        },
-                    ))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_sm()
+                            .font_weight(weight)
+                            .child(subject),
+                    )
                     .child(
                         div()
                             .truncate()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child(row.preview.clone()),
+                            .child(preview),
                     ),
             )
             .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
@@ -577,10 +787,11 @@ impl MailView {
                 .justify_center()
                 .text_sm()
                 .text_color(theme.muted_foreground)
-                .child(if self.loading_list {
-                    "Loading…"
-                } else {
-                    "No messages"
+                .child(match &self.search {
+                    Some(s) if s.loading => "Searching…",
+                    Some(_) => "Nothing found",
+                    None if self.loading_list => "Loading…",
+                    None => "No messages",
                 })
                 .into_any_element()
         } else {
@@ -598,25 +809,103 @@ impl MailView {
             .size_full()
             .into_any_element()
         };
-        let name = self
+        let mailbox_name = self
             .mailbox
             .as_ref()
             .and_then(|id| self.mailboxes.iter().find(|m| &m.id == id))
             .map(|m| m.name.clone())
             .unwrap_or_default();
+        let title = match &self.search {
+            Some(s) => {
+                let scope = if s.scope.is_some() {
+                    mailbox_name.as_str()
+                } else {
+                    "all mail"
+                };
+                match s.total {
+                    Some(n) => format!("{n} result{} in {scope}", if n == 1 { "" } else { "s" }),
+                    None => format!("Searching {scope}…"),
+                }
+            }
+            None => mailbox_name.clone(),
+        };
+        let busy = self.loading_more
+            || self.loading_list
+            || self.search.as_ref().is_some_and(|s| s.loading);
+        let scope_label = if self.search_all {
+            "All mail"
+        } else {
+            "This mailbox"
+        };
         v_flex()
             .size_full()
             .child(
                 h_flex()
                     .h(px(44.))
                     .flex_none()
+                    .px_2()
+                    .gap_1()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.search_input)
+                                .id("search")
+                                .prefix(
+                                    Icon::new(IconName::Search)
+                                        .small()
+                                        .text_color(theme.muted_foreground),
+                                )
+                                .cleanable(true),
+                        ),
+                    )
+                    .child(
+                        Button::new("search-scope")
+                            .ghost()
+                            .small()
+                            .label(scope_label)
+                            .tooltip("Search all mail or only the selected mailbox")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.search_all = !this.search_all;
+                                if this.search.is_some() {
+                                    this.run_search(window, cx);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .h(px(36.))
+                    .flex_none()
                     .px_3()
                     .gap_2()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child(name))
-                    .when(self.loading_more || self.loading_list, |d| {
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(title),
+                    )
+                    .when(busy, |d| {
                         d.child(gpui_kit::component::spinner::Spinner::new().small())
+                    })
+                    .when(self.search.is_some(), |d| {
+                        d.child(
+                            Button::new("close-search")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Close)
+                                .tooltip("Close search (Esc in the search box)")
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.reset_search(window, cx)
+                                    }),
+                                ),
+                        )
                     })
                     .child(
                         Button::new("refresh")
@@ -653,6 +942,7 @@ impl Render for MailView {
             .on_action(cx.listener(Self::view_source))
             .on_action(cx.listener(Self::view_headers))
             .on_action(cx.listener(Self::refresh))
+            .on_action(cx.listener(Self::focus_search))
             .child(
                 h_resizable("mail-panes")
                     .child(

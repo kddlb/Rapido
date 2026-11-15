@@ -434,8 +434,14 @@ impl Store {
         let Some(q) = self.query(mailbox)? else {
             return Ok(Vec::new());
         };
+        self.thread_rows(&q.ids, Some(mailbox))
+    }
+
+    /// Thread rows for representative email ids, in order. With `mailbox`,
+    /// emails no longer in it are skipped; unknown emails are always skipped.
+    pub fn thread_rows(&self, ids: &[Id], mailbox: Option<&Id>) -> Result<Vec<ThreadRow>> {
         self.read(|c| {
-            let mut rows = Vec::with_capacity(q.ids.len());
+            let mut rows = Vec::with_capacity(ids.len());
             let mut in_mailbox = c.prepare(
                 "SELECT 1 FROM email_mailbox WHERE email_id = ?1 AND mailbox_id = ?2",
             )?;
@@ -450,8 +456,10 @@ impl Store {
                         e.has_attachment
                  FROM email e WHERE e.thread_id = ?1 ORDER BY e.received_at, e.id",
             )?;
-            for id in &q.ids {
-                if !in_mailbox.exists(params![id.as_str(), mailbox.as_str()])? {
+            for id in ids {
+                if let Some(mb) = mailbox
+                    && !in_mailbox.exists(params![id.as_str(), mb.as_str()])?
+                {
                     continue;
                 }
                 let Some((thread_id, subject, preview, received, has_att)) = rep

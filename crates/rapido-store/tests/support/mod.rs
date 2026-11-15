@@ -169,10 +169,24 @@ impl FakeState {
     }
 
     fn query_ids(&self, mailbox: &str) -> Vec<String> {
+        self.filtered_ids(Some(mailbox), None)
+    }
+
+    fn matches_text(e: &Value, text: &str) -> bool {
+        let t = text.to_lowercase();
+        ["subject", "preview"].iter().any(|k| {
+            e[*k]
+                .as_str()
+                .is_some_and(|v| v.to_lowercase().contains(&t))
+        }) || e["from"].to_string().to_lowercase().contains(&t)
+    }
+
+    fn filtered_ids(&self, mailbox: Option<&str>, text: Option<&str>) -> Vec<String> {
         let mut list: Vec<&Value> = self
             .emails
             .values()
-            .filter(|e| e["mailboxIds"].get(mailbox).is_some())
+            .filter(|e| mailbox.is_none_or(|mb| e["mailboxIds"].get(mb).is_some()))
+            .filter(|e| text.is_none_or(|t| Self::matches_text(e, t)))
             .collect();
         list.sort_by(|a, b| {
             b["receivedAt"]
@@ -489,10 +503,13 @@ impl FakeJmap {
                 )
             }
             "Email/query" => {
-                let mailbox = args["filter"]["inMailbox"].as_str().unwrap().to_string();
-                let all = st.query_ids(&mailbox);
-                st.query_snapshots
-                    .insert((mailbox, st.email_state), all.clone());
+                let mailbox = args["filter"]["inMailbox"].as_str().map(String::from);
+                let text = args["filter"]["text"].as_str().map(String::from);
+                let all = st.filtered_ids(mailbox.as_deref(), text.as_deref());
+                if let (Some(mb), None) = (&mailbox, &text) {
+                    st.query_snapshots
+                        .insert((mb.clone(), st.email_state), all.clone());
+                }
                 let pos = args["position"].as_u64().unwrap_or(0) as usize;
                 let limit = args["limit"].as_u64().unwrap_or(u64::MAX) as usize;
                 let page: Vec<&String> = all.iter().skip(pos).take(limit).collect();
@@ -567,6 +584,47 @@ impl FakeJmap {
                     resp["notUpdated"] = Value::Object(not_updated);
                 }
                 (name.into(), resp)
+            }
+            "SearchSnippet/get" => {
+                let text = args["filter"]["text"].as_str().unwrap_or("").to_lowercase();
+                let ids: Vec<String> = args["emailIds"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mark = |v: &str| -> Option<String> {
+                    let lower = v.to_lowercase();
+                    let at = lower.find(&text)?;
+                    let esc = |s: &str| {
+                        s.replace('&', "&amp;")
+                            .replace('<', "&lt;")
+                            .replace('>', "&gt;")
+                    };
+                    Some(format!(
+                        "{}<mark>{}</mark>{}",
+                        esc(&v[..at]),
+                        esc(&v[at..at + text.len()]),
+                        esc(&v[at + text.len()..])
+                    ))
+                };
+                let list: Vec<Value> = ids
+                    .iter()
+                    .filter_map(|id| st.emails.get(id))
+                    .map(|e| {
+                        json!({
+                            "emailId": e["id"],
+                            "subject": e["subject"].as_str().and_then(mark),
+                            "preview": e["preview"].as_str().and_then(mark),
+                        })
+                    })
+                    .collect();
+                (
+                    name.into(),
+                    json!({ "accountId": "A1", "list": list, "notFound": null }),
+                )
             }
             other => (
                 "error".into(),

@@ -246,3 +246,40 @@ fn invocation_rejects_wrong_arity() {
     assert!(serde_json::from_value::<Invocation>(json!(["a", {}])).is_err());
     assert!(serde_json::from_value::<Invocation>(json!(["a", {}, "c", 1])).is_err());
 }
+
+#[test]
+fn search_snippets() {
+    let req = SearchSnippetGet {
+        account_id: "A1".into(),
+        filter: Some(
+            EmailFilterCondition {
+                text: Some("foo".into()),
+                ..Default::default()
+            }
+            .into(),
+        ),
+        email_ids: None,
+        email_ids_ref: Some(ResultReference::new("c0", "Email/query", "/ids")),
+    };
+    assert_eq!(
+        serde_json::to_value(&req).unwrap(),
+        json!({
+            "accountId": "A1",
+            "filter": { "text": "foo" },
+            "#emailIds": { "resultOf": "c0", "name": "Email/query", "path": "/ids" }
+        })
+    );
+    let resp: SearchSnippetGetResponse = serde_json::from_value(json!({
+        "accountId": "A1",
+        "list": [
+            { "emailId": "M1", "subject": "The <mark>foo</mark> &amp; bar", "preview": null }
+        ],
+        "notFound": null
+    }))
+    .unwrap();
+    assert_eq!(
+        resp.list[0].subject.as_deref(),
+        Some("The <mark>foo</mark> &amp; bar")
+    );
+    assert!(resp.list[0].preview.is_none());
+}

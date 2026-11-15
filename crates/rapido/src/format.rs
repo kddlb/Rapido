@@ -59,6 +59,59 @@ pub fn senders(list: &[EmailAddress]) -> String {
     }
 }
 
+/// Parse a JMAP search snippet (HTML-escaped, matches in `<mark>`) into plain
+/// text and the byte ranges to highlight.
+pub fn snippet_spans(snippet: &str) -> (String, Vec<std::ops::Range<usize>>) {
+    let mut text = String::with_capacity(snippet.len());
+    let mut ranges = Vec::new();
+    let mut open: Option<usize> = None;
+    let mut rest = snippet;
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix("<mark>") {
+            open.get_or_insert(text.len());
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("</mark>") {
+            if let Some(start) = open.take()
+                && start < text.len()
+            {
+                ranges.push(start..text.len());
+            }
+            rest = r;
+        } else if rest.starts_with('&') {
+            let entities = [
+                ("&amp;", '&'),
+                ("&lt;", '<'),
+                ("&gt;", '>'),
+                ("&quot;", '"'),
+                ("&#39;", '\''),
+                ("&apos;", '\''),
+            ];
+            match entities.iter().find(|(e, _)| rest.starts_with(e)) {
+                Some((e, c)) => {
+                    text.push(*c);
+                    rest = &rest[e.len()..];
+                }
+                None => {
+                    text.push('&');
+                    rest = &rest[1..];
+                }
+            }
+        } else {
+            let c = rest.chars().next().expect("non-empty");
+            if !c.is_control() {
+                text.push(c);
+            }
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    if let Some(start) = open
+        && start < text.len()
+    {
+        ranges.push(start..text.len());
+    }
+    (text, ranges)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +140,18 @@ mod tests {
         );
         assert_eq!(address(&a(Some(" Ann "), "a@x")), "Ann <a@x>");
         assert_eq!(senders(&[]), "(no sender)");
+    }
+
+    #[test]
+    fn snippets() {
+        let (t, r) = snippet_spans("The <mark>Fóo</mark> &amp; <mark>bar</mark>&lt;");
+        assert_eq!(t, "The Fóo & bar<");
+        assert_eq!(
+            r.iter().map(|r| &t[r.clone()]).collect::<Vec<_>>(),
+            ["Fóo", "bar"]
+        );
+        let (t, r) = snippet_spans("unclosed <mark>tail");
+        assert_eq!(&t[r[0].clone()], "tail");
+        assert_eq!(snippet_spans("a &bogus; b").0, "a &bogus; b");
     }
 }

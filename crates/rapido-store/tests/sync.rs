@@ -375,3 +375,35 @@ async fn push_loop_stops_on_auth_failure() {
         .unwrap();
     assert_eq!(fake.with(|s| s.push_connections), 1);
 }
+
+#[tokio::test]
+async fn search_finds_threads_with_snippets() {
+    let (_s, fake, engine) = setup().await;
+    fake.with(|s| s.add_email("m10", "t10", "archive", 10, true));
+
+    // All mail, threads collapsed: t1, t2, t3, t10.
+    let page = engine
+        .search("subject m", None, 0, PAGE_SIZE)
+        .await
+        .unwrap();
+    assert_eq!(page.total, Some(4));
+    let s = &page.snippets[&Id::from("m10")];
+    assert_eq!(s.subject.as_deref(), Some("<mark>Subject m</mark>10"));
+
+    // Results are cached and render as rows without a mailbox filter.
+    let rows = engine.store().thread_rows(&page.ids, None).unwrap();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0].email_id, Id::from("m10"));
+
+    // Scoped to a mailbox.
+    let page = engine
+        .search("m4", Some(&"archive".into()), 0, PAGE_SIZE)
+        .await
+        .unwrap();
+    assert_eq!(page.ids, vec![Id::from("m4")]);
+    let page = engine
+        .search("m4", Some(&inbox()), 0, PAGE_SIZE)
+        .await
+        .unwrap();
+    assert!(page.ids.is_empty());
+}

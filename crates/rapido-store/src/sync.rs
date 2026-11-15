@@ -41,6 +41,16 @@ const FLAGS: &[EmailProperty] = &[
     EmailProperty::MailboxIds,
 ];
 
+/// One page of search results: representative email ids (threads collapsed),
+/// newest first, with highlighted snippets.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchPage {
+    pub ids: Vec<Id>,
+    pub position: u64,
+    pub total: Option<u64>,
+    pub snippets: std::collections::HashMap<Id, SearchSnippet>,
+}
+
 /// A triage action on a set of emails.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TriageOp {
@@ -270,6 +280,82 @@ impl SyncEngine {
             out.extend(b.send().await?.get(&g)?.list);
         }
         Ok(out)
+    }
+
+    /// Server-side full-text search, optionally within one mailbox. Matching
+    /// emails and their threads are cached so the results render and open
+    /// like any other list.
+    pub async fn search(
+        &self,
+        text: &str,
+        mailbox: Option<&Id>,
+        position: u64,
+        limit: u64,
+    ) -> Result<SearchPage> {
+        let filter: jmap_proto::Filter<EmailFilterCondition> = EmailFilterCondition {
+            text: Some(text.to_owned()),
+            in_mailbox: mailbox.cloned(),
+            ..Default::default()
+        }
+        .into();
+        let mut query = Query::new(self.account.clone());
+        query.filter = Some(filter.clone());
+        query.sort = Some(vec![Comparator::desc(EmailSortProperty::ReceivedAt)]);
+        query.position = Some(position as i64);
+        query.limit = Some(limit);
+        query.calculate_total = Some(true);
+
+        let mut b = self.client.batch();
+        let q = b.call(EmailQuery {
+            query,
+            collapse_threads: true,
+        })?;
+        let reps = b.call(EmailGet::new(
+            Get::new(self.account.clone())
+                .ids_ref(q.result_ref("/ids"))
+                .properties(vec![EmailProperty::Id, EmailProperty::ThreadId]),
+        ))?;
+        let threads = b.call(ThreadGet(
+            Get::new(self.account.clone()).ids_ref(reps.result_ref("/list/*/threadId")),
+        ))?;
+        let emails = b.call(EmailGet::new(
+            Get::new(self.account.clone())
+                .ids_ref(threads.result_ref("/list/*/emailIds"))
+                .properties(METADATA.to_vec()),
+        ))?;
+        let snippets = b.call(SearchSnippetGet {
+            account_id: self.account.clone(),
+            filter: Some(filter),
+            email_ids: None,
+            email_ids_ref: Some(q.result_ref("/ids")),
+        })?;
+        let r = b.send().await?;
+        let q = r.get(&q)?;
+        let threads = r.get(&threads)?;
+        let emails = r.get(&emails)?;
+        self.store.upsert_emails(&emails.list)?;
+        self.store.upsert_threads(&threads.list)?;
+        if self.store.state("Email")?.is_none() {
+            self.store.set_state("Email", emails.state.as_str())?;
+        }
+        // Snippets are a nicety; a server without them still gives results.
+        let snippets = match r.get(&snippets) {
+            Ok(s) => s
+                .list
+                .into_iter()
+                .map(|s| (s.email_id.clone(), s))
+                .collect(),
+            Err(e) => {
+                tracing::debug!("no search snippets: {e}");
+                Default::default()
+            }
+        };
+        Ok(SearchPage {
+            ids: q.ids,
+            position: q.position,
+            total: q.total,
+            snippets,
+        })
     }
 
     /// Bring a cached mailbox list up to date with `Email/queryChanges`, falling

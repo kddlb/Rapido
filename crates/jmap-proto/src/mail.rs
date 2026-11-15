@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::string_enum;
 use crate::method::*;
-use crate::{Id, capability};
+use crate::{Filter, Id, capability};
 
 // ---------------------------------------------------------------------------
 // Mailbox (RFC 8621 §2)
@@ -367,6 +367,30 @@ pub struct EmailFilterCondition {
 }
 
 // ---------------------------------------------------------------------------
+// SearchSnippet (RFC 8621 §5)
+
+/// Subject and preview of an email with search matches wrapped in `<mark>`,
+/// HTML-escaped. `None` when the field has no match.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSnippet {
+    pub email_id: Id,
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSnippetGetResponse {
+    pub account_id: Id,
+    pub list: Vec<SearchSnippet>,
+    #[serde(default)]
+    pub not_found: Option<Vec<Id>>,
+}
+
+// ---------------------------------------------------------------------------
 // Methods
 
 macro_rules! method {
@@ -501,6 +525,25 @@ method!(
 #[serde(transparent)]
 pub struct EmailSet(pub Set<Email>);
 method!(EmailSet, "Email/set", capability::MAIL, SetResponse<Email>);
+
+/// `SearchSnippet/get` (RFC 8621 §5.1).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSnippetGet {
+    pub account_id: Id,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<Filter<EmailFilterCondition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email_ids: Option<Vec<Id>>,
+    #[serde(rename = "#emailIds", skip_serializing_if = "Option::is_none")]
+    pub email_ids_ref: Option<crate::ResultReference>,
+}
+method!(
+    SearchSnippetGet,
+    "SearchSnippet/get",
+    capability::MAIL,
+    SearchSnippetGetResponse
+);
 
 /// Patch helpers for common `Email/set` updates.
 pub mod patch {

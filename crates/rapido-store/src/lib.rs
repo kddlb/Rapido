@@ -11,4 +11,4 @@ pub use error::{Error, Result};
 pub use model::{
     EmailBody, EmailMeta, MailboxRow, QueryCache, StoreEvent, ThreadRow, mailbox_tree,
 };
-pub use sync::{PAGE_SIZE, SyncEngine, TriageOp};
+pub use sync::{PAGE_SIZE, SearchPage, SyncEngine, TriageOp};

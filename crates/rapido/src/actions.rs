@@ -6,6 +6,9 @@ pub const MAIL_CONTEXT: &str = "Mail";
 pub const READER_CONTEXT: &str = "Reader";
 pub const SOURCE_CONTEXT: &str = "Source";
 
+/// Single-key shortcuts must not fire while typing in a text field.
+const MAIL_KEYS: &str = "Mail && !Input";
+
 actions!(
     rapido,
     [
@@ -22,21 +25,25 @@ actions!(
         ViewHeaders,
         CloseWindow,
         Refresh,
+        FocusSearch,
     ]
 );
 
 pub fn bind_keys(cx: &mut App) {
+    let keys = Some(MAIL_KEYS);
     let mail = Some(MAIL_CONTEXT);
     cx.bind_keys([
-        KeyBinding::new("j", NextThread, mail),
-        KeyBinding::new("down", NextThread, mail),
-        KeyBinding::new("k", PrevThread, mail),
-        KeyBinding::new("up", PrevThread, mail),
-        KeyBinding::new("enter", OpenInNewWindow, mail),
+        KeyBinding::new("j", NextThread, keys),
+        KeyBinding::new("down", NextThread, keys),
+        KeyBinding::new("k", PrevThread, keys),
+        KeyBinding::new("up", PrevThread, keys),
+        KeyBinding::new("enter", OpenInNewWindow, keys),
+        KeyBinding::new("/", FocusSearch, keys),
+        KeyBinding::new("ctrl-f", FocusSearch, mail),
         KeyBinding::new("ctrl-r", Refresh, mail),
     ]);
     // Thread actions work in the main window and in pop-out readers.
-    for ctx in [MAIL_CONTEXT, READER_CONTEXT] {
+    for ctx in [MAIL_KEYS, READER_CONTEXT] {
         let ctx = Some(ctx);
         cx.bind_keys([
             KeyBinding::new("e", Archive, ctx),
@@ -47,6 +54,11 @@ pub fn bind_keys(cx: &mut App) {
             KeyBinding::new("u", ToggleRead, ctx),
             KeyBinding::new("v", MoveTo, ctx),
             KeyBinding::new("o", OpenInBrowser, ctx),
+        ]);
+    }
+    for ctx in [MAIL_CONTEXT, READER_CONTEXT] {
+        let ctx = Some(ctx);
+        cx.bind_keys([
             KeyBinding::new("ctrl-u", ViewSource, ctx),
             KeyBinding::new("ctrl-shift-h", ViewHeaders, ctx),
         ]);
