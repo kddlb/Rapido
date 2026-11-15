@@ -43,6 +43,25 @@ impl JmapClient {
         })
     }
 
+    /// Build a client from a previously fetched session (e.g. cached for offline
+    /// start). The session is refreshed automatically when the server reports a
+    /// new session state.
+    pub fn from_session(
+        session_url: impl Into<String>,
+        auth: Arc<dyn Auth>,
+        session: Session,
+    ) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .user_agent(concat!("Rapido/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+        Ok(Self {
+            http,
+            auth,
+            session_url: session_url.into(),
+            session: RwLock::new(Arc::new(session)),
+        })
+    }
+
     pub fn session(&self) -> Arc<Session> {
         self.session.read().expect("session lock poisoned").clone()
     }

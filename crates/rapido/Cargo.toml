@@ -3,6 +3,27 @@ name = "rapido"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Rapido, a native JMAP mail client"
 
 [dependencies]
 gpui-kit.workspace = true
+jmap-proto.workspace = true
+jmap-http.workspace = true
+rapido-store.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+futures.workspace = true
+ammonia = "4"
+html2text = "0.17"
+keyring = "4"
+directories = "6"
+base64 = "0.23"
+tempfile = "3"
+toml = "1"
+regex = "1"
+url = "2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
