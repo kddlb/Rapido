@@ -485,6 +485,38 @@ impl SyncEngine {
         Ok(body)
     }
 
+    /// Every header field of an email, in message order, with raw values.
+    pub async fn headers(&self, id: &Id) -> Result<Vec<EmailHeader>> {
+        let email = self
+            .fetch_emails(
+                std::slice::from_ref(id),
+                &[EmailProperty::Id, EmailProperty::Headers],
+            )
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::NotFound(format!("email {id}")))?;
+        Ok(email.headers.unwrap_or_default())
+    }
+
+    /// The complete RFC 5322 message as received.
+    pub async fn raw_message(&self, id: &Id) -> Result<bytes::Bytes> {
+        let blob = match self.store.email(id)?.and_then(|m| m.blob_id) {
+            Some(b) => b,
+            None => self
+                .fetch_emails(
+                    std::slice::from_ref(id),
+                    &[EmailProperty::Id, EmailProperty::BlobId],
+                )
+                .await?
+                .into_iter()
+                .next()
+                .and_then(|e| e.blob_id)
+                .ok_or_else(|| Error::NotFound(format!("message source for {id}")))?,
+        };
+        self.blob(&blob, "message.eml", "message/rfc822").await
+    }
+
     /// Download a blob (attachments, inline images).
     pub async fn blob(&self, blob: &Id, name: &str, ty: &str) -> Result<bytes::Bytes> {
         Ok(self.client.download(&self.account, blob, name, ty).await?)

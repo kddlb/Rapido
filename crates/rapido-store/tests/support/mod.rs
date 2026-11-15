@@ -66,6 +66,11 @@ impl FakeState {
                 "to": [{ "name": null, "email": "me@example.com" }], "cc": null, "replyTo": null,
                 "subject": format!("Subject {id}"), "sentAt": "2025-01-01T00:00:00+01:00",
                 "hasAttachment": false, "preview": format!("Preview {id}"),
+                "headers": [
+                    { "name": "Received", "value": " from mx.example.com\r\n\tby mx2.example.com" },
+                    { "name": "From", "value": format!(" Sender {id} <{id}@example.com>") },
+                    { "name": "Subject", "value": format!(" Subject {id}") }
+                ],
                 "textBody": [{ "partId": "1", "blobId": format!("T{id}"), "type": "text/plain", "size": 10 }],
                 "htmlBody": [{ "partId": "2", "blobId": format!("H{id}"), "type": "text/html", "size": 20 }],
                 "attachments": [],
@@ -299,6 +304,16 @@ impl FakeJmap {
         Mock::given(method("POST"))
             .and(path("/api/"))
             .respond_with(fake.clone())
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path_regex(
+                r"^/download/A1/B[^/]+/message\.eml$",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("From: x@example.com\r\nSubject: raw\r\n\r\nbody\r\n"),
+            )
             .mount(&server)
             .await;
         (server, fake)

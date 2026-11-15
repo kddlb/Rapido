@@ -179,6 +179,9 @@ pub struct Email {
     pub has_attachment: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+    /// Every header field in message order, raw values (RFC 8621 §4.1.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<Vec<EmailHeader>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_structure: Option<EmailBodyPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -277,6 +280,7 @@ string_enum!(
         SentAt => "sentAt",
         HasAttachment => "hasAttachment",
         Preview => "preview",
+        Headers => "headers",
         BodyStructure => "bodyStructure",
         BodyValues => "bodyValues",
         TextBody => "textBody",

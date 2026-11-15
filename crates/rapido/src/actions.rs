@@ -4,6 +4,7 @@ use gpui_kit::{App, KeyBinding, actions};
 
 pub const MAIL_CONTEXT: &str = "Mail";
 pub const READER_CONTEXT: &str = "Reader";
+pub const SOURCE_CONTEXT: &str = "Source";
 
 actions!(
     rapido,
@@ -17,6 +18,8 @@ actions!(
         MoveTo,
         OpenInBrowser,
         OpenInNewWindow,
+        ViewSource,
+        ViewHeaders,
         CloseWindow,
         Refresh,
     ]
@@ -44,11 +47,15 @@ pub fn bind_keys(cx: &mut App) {
             KeyBinding::new("u", ToggleRead, ctx),
             KeyBinding::new("v", MoveTo, ctx),
             KeyBinding::new("o", OpenInBrowser, ctx),
+            KeyBinding::new("ctrl-u", ViewSource, ctx),
+            KeyBinding::new("ctrl-shift-h", ViewHeaders, ctx),
         ]);
     }
-    let reader = Some(READER_CONTEXT);
-    cx.bind_keys([
-        KeyBinding::new("ctrl-w", CloseWindow, reader),
-        KeyBinding::new("escape", CloseWindow, reader),
-    ]);
+    for ctx in [READER_CONTEXT, SOURCE_CONTEXT] {
+        let ctx = Some(ctx);
+        cx.bind_keys([
+            KeyBinding::new("ctrl-w", CloseWindow, ctx),
+            KeyBinding::new("escape", CloseWindow, ctx),
+        ]);
+    }
 }

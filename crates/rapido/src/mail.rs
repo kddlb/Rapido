@@ -359,6 +359,8 @@ forward!(
     MoveTo => move_to,
     OpenInBrowser => open_newest_in_browser,
     OpenInNewWindow => open_in_new_window,
+    ViewSource => view_source,
+    ViewHeaders => view_headers,
 );
 
 // ----- rendering ------------------------------------------------------------
@@ -648,6 +650,8 @@ impl Render for MailView {
             .on_action(cx.listener(Self::move_to))
             .on_action(cx.listener(Self::open_newest_in_browser))
             .on_action(cx.listener(Self::open_in_new_window))
+            .on_action(cx.listener(Self::view_source))
+            .on_action(cx.listener(Self::view_headers))
             .on_action(cx.listener(Self::refresh))
             .child(
                 h_resizable("mail-panes")

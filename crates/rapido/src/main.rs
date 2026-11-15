@@ -5,12 +5,14 @@ mod body_text;
 mod browser_view;
 mod config;
 mod format;
+mod header_fields;
 mod links;
 mod mail;
 mod reader;
 mod root;
 mod services;
 mod setup;
+mod source_view;
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;

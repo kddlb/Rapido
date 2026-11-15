@@ -294,3 +294,15 @@ async fn store_persists_on_disk() {
     let s = Store::open(&path).unwrap();
     assert_eq!(s.state("Email").unwrap().as_deref(), Some("42"));
 }
+
+#[tokio::test]
+async fn headers_and_raw_source() {
+    let (_s, _fake, engine) = setup().await;
+    engine.load_mailbox(&inbox(), 0, PAGE_SIZE).await.unwrap();
+    let headers = engine.headers(&"m1".into()).await.unwrap();
+    assert_eq!(headers.len(), 3);
+    assert_eq!(headers[0].name, "Received");
+    assert!(headers[0].value.contains("\r\n\tby"), "raw folding kept");
+    let raw = engine.raw_message(&"m1".into()).await.unwrap();
+    assert!(raw.starts_with(b"From: x@example.com"));
+}

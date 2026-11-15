@@ -26,4 +26,5 @@ tempfile = "3"
 toml = "1"
 regex = "1"
 url = "2"
+rfc2047-decoder = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

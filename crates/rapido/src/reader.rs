@@ -27,6 +27,7 @@ use crate::browser_view::{self, Header, InlinePart};
 use crate::format;
 use crate::links::{self, LinkTarget};
 use crate::services;
+use crate::source_view::{SourceKind, open_source_window};
 
 struct ReaderEmail {
     meta: EmailMeta,
@@ -350,6 +351,32 @@ impl ReaderView {
         open_reader_window(self.engine.clone(), thread, self.mailbox.clone(), cx);
     }
 
+    fn open_source(&mut self, id: Id, kind: SourceKind, cx: &mut Context<Self>) {
+        let subject = self
+            .emails
+            .iter()
+            .find(|e| e.meta.id == id)
+            .map(|e| e.meta.subject.clone())
+            .unwrap_or_default();
+        open_source_window(self.engine.clone(), id, subject, kind, cx);
+    }
+
+    fn newest_id(&self) -> Option<Id> {
+        self.emails.last().map(|e| e.meta.id.clone())
+    }
+
+    pub fn view_source(&mut self, _: &ViewSource, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.newest_id() {
+            self.open_source(id, SourceKind::Raw, cx);
+        }
+    }
+
+    pub fn view_headers(&mut self, _: &ViewHeaders, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.newest_id() {
+            self.open_source(id, SourceKind::Headers, cx);
+        }
+    }
+
     fn close_window(&mut self, _: &CloseWindow, window: &mut Window, _: &mut Context<Self>) {
         if self.standalone {
             window.remove_window();
@@ -529,6 +556,17 @@ pub fn open_reader_window(engine: Arc<SyncEngine>, thread: Id, mailbox: Option<I
     if let Err(e) = result {
         tracing::warn!("could not open reader window: {e:#}");
     }
+}
+
+/// Tooltip for a link: its real destination, host in punycode.
+pub fn link_tooltip(url: &SharedString, window: &mut Window, cx: &mut App) -> AnyView {
+    let t = links::inspect(url);
+    let text = if t.idn {
+        format!("{}\nInternationalized domain, shown in punycode", t.display)
+    } else {
+        t.display
+    };
+    Tooltip::new(text).build(window, cx)
 }
 
 /// Ask before opening any link from a message, showing its real destination.
@@ -730,15 +768,7 @@ impl ReaderView {
                 .on_link_click(|url, _, window, cx| {
                     confirm_open_link(links::inspect(url), window, cx)
                 })
-                .link_tooltip(|url, window, cx| {
-                    let t = links::inspect(url);
-                    let text = if t.idn {
-                        format!("{}\nInternationalized domain, shown in punycode", t.display)
-                    } else {
-                        t.display
-                    };
-                    Tooltip::new(text).build(window, cx)
-                })
+                .link_tooltip(link_tooltip)
                 .font_family(theme.mono_font_family.clone())
                 .text_size(theme.mono_font_size)
                 .into_any_element(),
@@ -791,10 +821,45 @@ impl ReaderView {
                             }),
                     )
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format::full_date(e.meta.received_at)),
+                        v_flex()
+                            .items_end()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(format::full_date(e.meta.received_at)),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child({
+                                        let id = id.clone();
+                                        Button::new(("headers", ix))
+                                            .ghost()
+                                            .xsmall()
+                                            .label("Headers")
+                                            .tooltip("Show all header fields (Ctrl+Shift+H)")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.open_source(
+                                                    id.clone(),
+                                                    SourceKind::Headers,
+                                                    cx,
+                                                )
+                                            }))
+                                    })
+                                    .child({
+                                        let id = id.clone();
+                                        Button::new(("source", ix))
+                                            .ghost()
+                                            .xsmall()
+                                            .label("Source")
+                                            .tooltip("Show the raw message (Ctrl+U)")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.open_source(id.clone(), SourceKind::Raw, cx)
+                                            }))
+                                    }),
+                            ),
                     ),
             )
             .when(e.has_html, |d| {
@@ -950,6 +1015,8 @@ impl Render for ReaderView {
                 .on_action(cx.listener(Self::toggle_read))
                 .on_action(cx.listener(Self::move_to))
                 .on_action(cx.listener(Self::open_newest_in_browser))
+                .on_action(cx.listener(Self::view_source))
+                .on_action(cx.listener(Self::view_headers))
                 .on_action(cx.listener(Self::close_window))
         } else {
             root
