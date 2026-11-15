@@ -2,6 +2,7 @@
 name = "jmap-http"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "JMAP HTTP transport: auth, session, batched requests, blobs, push"
 
 [dependencies]

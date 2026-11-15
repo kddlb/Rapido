@@ -21,3 +21,7 @@ cargo run -p rapido
 # Read-only check against a real Fastmail account:
 RAPIDO_FASTMAIL_TOKEN=… cargo test -p jmap-http --test live_fastmail -- --ignored --nocapture
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE).
