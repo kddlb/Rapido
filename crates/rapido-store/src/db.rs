@@ -509,6 +509,46 @@ impl Store {
         })
     }
 
+    // ----- remote image allow list ---------------------------------------
+
+    pub fn allow_remote_images(&self, address: &str) -> Result<()> {
+        self.write(|tx| {
+            tx.execute(
+                "INSERT OR IGNORE INTO remote_image_sender (address) VALUES (?1)",
+                [address.trim().to_lowercase()],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn forget_remote_images(&self, address: &str) -> Result<()> {
+        self.write(|tx| {
+            tx.execute(
+                "DELETE FROM remote_image_sender WHERE address = ?1",
+                [address.trim().to_lowercase()],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn remote_images_allowed(&self, address: &str) -> Result<bool> {
+        self.read(|c| {
+            Ok(
+                c.prepare_cached("SELECT 1 FROM remote_image_sender WHERE address = ?1")?
+                    .exists([address.trim().to_lowercase()])?,
+            )
+        })
+    }
+
+    pub fn remote_image_senders(&self) -> Result<Vec<String>> {
+        self.read(|c| {
+            let mut st = c.prepare("SELECT address FROM remote_image_sender ORDER BY address")?;
+            Ok(st
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
     // ----- optimistic triage ---------------------------------------------
 
     pub fn snapshot_flags(&self, ids: &[Id]) -> Result<Vec<FlagSnapshot>> {
@@ -937,6 +977,18 @@ mod tests {
         );
         assert!(s.body(&"m1".into()).unwrap().is_none());
         assert!(s.snapshot_flags(&["m1".into()]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn remote_image_allow_list() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(!s.remote_images_allowed("News@Example.com").unwrap());
+        s.allow_remote_images(" News@Example.com ").unwrap();
+        s.allow_remote_images("news@example.com").unwrap();
+        assert!(s.remote_images_allowed("NEWS@example.COM").unwrap());
+        assert_eq!(s.remote_image_senders().unwrap(), ["news@example.com"]);
+        s.forget_remote_images("News@example.com").unwrap();
+        assert!(s.remote_image_senders().unwrap().is_empty());
     }
 
     #[test]

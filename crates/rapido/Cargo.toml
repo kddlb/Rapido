@@ -27,4 +27,5 @@ toml = "1"
 regex = "1"
 url = "2"
 rfc2047-decoder = "1"
+notify-rust = "4"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

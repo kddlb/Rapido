@@ -461,6 +461,7 @@ impl SyncEngine {
             return Ok(()); // nothing cached yet
         };
         let mut changed_ids = Vec::new();
+        let mut new_mail = Vec::new();
         loop {
             let mut b = self.client.batch();
             let ch = b.call(EmailChanges(Changes {
@@ -486,6 +487,13 @@ impl SyncEngine {
             let created = r.get(&created)?.list;
             let updated = r.get(&updated)?.list;
 
+            let inbox = self.store.mailbox_by_role(&MailboxRole::Inbox)?;
+            new_mail.extend(
+                created
+                    .iter()
+                    .filter(|e| !e.is_seen() && inbox.as_ref().is_some_and(|i| e.in_mailbox(i)))
+                    .map(|e| e.id.clone()),
+            );
             let mut threads = self.store.delete_emails(&changes.destroyed)?;
             threads.extend(created.iter().filter_map(|e| e.thread_id.clone()));
             self.store.upsert_emails(&created)?;
@@ -505,6 +513,9 @@ impl SyncEngine {
         }
         if !changed_ids.is_empty() {
             self.emit(StoreEvent::EmailsChanged(changed_ids));
+        }
+        if !new_mail.is_empty() {
+            self.emit(StoreEvent::NewMail(new_mail));
         }
         Ok(())
     }

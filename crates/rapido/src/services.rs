@@ -54,6 +54,14 @@ where
     runtime().spawn(fut).abort_handle()
 }
 
+/// Run blocking work off the UI thread without waiting for it.
+pub fn spawn_blocking_detached<F>(f: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    drop(runtime().spawn_blocking(f));
+}
+
 /// Run blocking work (keyring, files) off the UI thread.
 pub async fn blocking<T, F>(f: F) -> Result<T>
 where

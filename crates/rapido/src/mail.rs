@@ -19,7 +19,8 @@ use crate::actions::*;
 use crate::browser_view;
 use crate::config::Config;
 use crate::format;
-use crate::reader::{ReaderView, open_reader_window};
+use crate::notifications;
+use crate::reader::{ReaderView, open_image_senders_dialog, open_reader_window};
 use crate::services::{self, Account};
 
 const ROW_HEIGHT: f32 = 68.;
@@ -64,6 +65,8 @@ pub struct MailView {
     online: Option<bool>,
     status: Option<SharedString>,
     push: tokio::task::AbortHandle,
+    window_active: bool,
+    title: String,
 }
 
 impl EventEmitter<MailEvent> for MailView {}
@@ -125,6 +128,10 @@ impl MailView {
                 _ => {}
             },
         )];
+        let mut subs = subs;
+        subs.push(cx.observe_window_activation(window, |this, window, _| {
+            this.window_active = window.is_window_active();
+        }));
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         let mut this = Self {
@@ -147,6 +154,8 @@ impl MailView {
             online: None,
             status: None,
             push,
+            window_active: window.is_window_active(),
+            title: String::new(),
         };
         this.refresh_mailboxes(cx);
         this
@@ -171,6 +180,7 @@ impl MailView {
             }
             Some(StoreEvent::EmailsChanged(_)) => self.reload_rows(cx),
             Some(StoreEvent::BodyLoaded(_)) => {}
+            Some(StoreEvent::NewMail(ids)) => self.announce_new_mail(ids),
             Some(StoreEvent::Online) => {
                 self.online = Some(true);
                 self.status = None;
@@ -350,6 +360,35 @@ impl MailView {
         tracing::warn!("{e:#}");
         self.status = Some(format!("{e:#}").into());
         cx.notify();
+    }
+
+    /// Desktop notification for new Inbox mail, unless the window is focused.
+    fn announce_new_mail(&mut self, ids: Vec<Id>) {
+        if self.window_active || ids.is_empty() {
+            return;
+        }
+        let store = self.engine().store().clone();
+        let metas: Vec<_> = ids
+            .iter()
+            .filter_map(|id| store.email(id).ok().flatten())
+            .collect();
+        let notes = notifications::for_new_mail(&metas);
+        if notes.is_empty() {
+            return;
+        }
+        services::spawn_blocking_detached(move || {
+            for (summary, body) in notes {
+                if let Err(e) = notify_rust::Notification::new()
+                    .appname("Rápido")
+                    .summary(&summary)
+                    .body(&body)
+                    .icon("mail-unread")
+                    .show()
+                {
+                    tracing::warn!("desktop notification failed: {e}");
+                }
+            }
+        });
     }
 
     // ----- search ---------------------------------------------------------
@@ -675,6 +714,17 @@ impl MailView {
                             .child(div().truncate().child(self.account.username().to_owned())),
                     )
                     .child(
+                        Button::new("image-senders")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Eye)
+                            .label("Image senders…")
+                            .tooltip("Senders whose remote images load automatically")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                open_image_senders_dialog(this.engine().store().clone(), window, cx)
+                            })),
+                    )
+                    .child(
                         Button::new("sign-out")
                             .ghost()
                             .xsmall()
@@ -950,8 +1000,18 @@ impl MailView {
 }
 
 impl Render for MailView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let unread = self
+            .mailboxes
+            .iter()
+            .find(|m| m.role == Some(MailboxRole::Inbox))
+            .map_or(0, |m| m.unread_emails);
+        let title = notifications::window_title(unread, self.account.username());
+        if title != self.title {
+            window.set_window_title(&title);
+            self.title = title;
+        }
         let status = self.status.clone();
         v_flex()
             .size_full()

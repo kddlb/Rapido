@@ -5553,6 +5553,7 @@ dependencies = [
  "jmap-http",
  "jmap-proto",
  "keyring",
+ "notify-rust",
  "rapido-store",
  "regex",
  "rfc2047-decoder",

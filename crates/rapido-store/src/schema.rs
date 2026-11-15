@@ -1,7 +1,8 @@
 use rusqlite::Connection;
 
 /// Ordered migrations; `PRAGMA user_version` records how many have run.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE mailbox (
     id             TEXT PRIMARY KEY,
     name           TEXT NOT NULL,
@@ -76,7 +77,14 @@ CREATE TABLE pending_op (
     email_id TEXT NOT NULL,
     patch    TEXT NOT NULL
 );
-"#];
+"#,
+    // 2: senders whose remote images load without asking (lowercased address).
+    r#"
+CREATE TABLE remote_image_sender (
+    address TEXT PRIMARY KEY
+);
+"#,
+];
 
 pub fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "foreign_keys", true)?;

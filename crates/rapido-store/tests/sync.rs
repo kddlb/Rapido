@@ -407,3 +407,24 @@ async fn search_finds_threads_with_snippets() {
         .unwrap();
     assert!(page.ids.is_empty());
 }
+
+#[tokio::test]
+async fn new_unread_inbox_mail_is_announced() {
+    let (_s, fake, engine) = setup().await;
+    engine.sync_mailboxes().await.unwrap();
+    engine.load_mailbox(&inbox(), 0, PAGE_SIZE).await.unwrap();
+    let mut rx = engine.subscribe();
+    fake.with(|s| {
+        s.add_email("n1", "tn1", "inbox", 20, false); // announced
+        s.add_email("n2", "tn2", "inbox", 21, true); // already read
+        s.add_email("n3", "tn3", "archive", 22, false); // not in Inbox
+    });
+    engine.sync_emails().await.unwrap();
+    let mut announced = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let StoreEvent::NewMail(ids) = ev {
+            announced = Some(ids);
+        }
+    }
+    assert_eq!(announced, Some(vec![Id::from("n1")]));
+}

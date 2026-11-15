@@ -167,6 +167,9 @@ pub enum StoreEvent {
     /// Metadata (flags, membership) of these emails changed.
     EmailsChanged(Vec<Id>),
     BodyLoaded(Id),
+    /// Unread mail that just arrived in the Inbox (from delta sync only, so a
+    /// first sync or full resync doesn't announce the whole mailbox).
+    NewMail(Vec<Id>),
     Online,
     Offline,
     AuthFailed,

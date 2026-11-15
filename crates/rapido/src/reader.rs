@@ -8,6 +8,7 @@ use std::sync::Arc;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -26,6 +27,7 @@ use crate::body_text::{find_links, reader_text, to_view_html};
 use crate::browser_view::{self, Header, InlinePart};
 use crate::format;
 use crate::links::{self, LinkTarget};
+use crate::sender_auth;
 use crate::services;
 use crate::source_view::{SourceKind, open_source_window};
 
@@ -413,9 +415,12 @@ impl ReaderView {
             return;
         };
         let engine = self.engine.clone();
+        let store = self.engine.store().clone();
         cx.spawn_in(window, async move |this, cx| {
             let prepared = services::run(async move {
                 let body = engine.body(&meta.id).await?;
+                // Needed to verify the sender before trusting an allow-list entry.
+                let headers = engine.headers(&meta.id).await.unwrap_or_default();
                 let html = body.html().or_else(|| {
                     body.plain_text().map(|t| {
                         format!(
@@ -449,11 +454,19 @@ impl ReaderView {
                         Err(e) => tracing::warn!("inline part {cid}: {e}"),
                     }
                 }
-                Ok((meta, html.unwrap_or_default(), parts))
+                Ok((meta, html.unwrap_or_default(), parts, headers))
             })
             .await;
             let _ = this.update_in(cx, |_, window, cx| match prepared {
-                Ok((meta, html, parts)) => {
+                Ok((meta, html, parts, headers)) => {
+                    let sender = meta.from.first().map(|a| a.email.trim().to_lowercase());
+                    let verified = sender
+                        .as_deref()
+                        .and_then(sender_auth::domain_of)
+                        .is_some_and(|d| sender_auth::dmarc_pass_for(&headers, &d));
+                    let allowed = sender
+                        .as_deref()
+                        .is_some_and(|s| store.remote_images_allowed(s).unwrap_or(false));
                     let page = Rc::new(PageInputs {
                         header: Header {
                             from: format::address_list(&meta.from),
@@ -464,10 +477,25 @@ impl ReaderView {
                         html,
                         parts,
                     });
-                    if browser_view::has_remote_content(&browser_view::sanitize(&page.html)) {
-                        ask_remote_then_open(page, window, cx);
-                    } else {
+                    if !browser_view::has_remote_content(&browser_view::sanitize(&page.html)) {
                         write_and_open(&page, false, window, cx);
+                    } else if allowed && verified {
+                        write_and_open(&page, true, window, cx);
+                        window.push_notification(
+                            Notification::info(format!(
+                                "Loaded remote images: {} is on your allow list.",
+                                sender.unwrap_or_default()
+                            )),
+                            cx,
+                        );
+                    } else {
+                        let trust = Rc::new(SenderTrust {
+                            sender,
+                            verified,
+                            allowed,
+                            store: store.clone(),
+                        });
+                        ask_remote_then_open(page, trust, window, cx);
                     }
                 }
                 Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
@@ -628,18 +656,69 @@ fn write_and_open(page: &PageInputs, allow_remote: bool, window: &mut Window, cx
     }
 }
 
-fn ask_remote_then_open(page: Rc<PageInputs>, window: &mut Window, cx: &mut App) {
+/// What we know about the sender when asking about remote images.
+struct SenderTrust {
+    sender: Option<String>,
+    /// Our server recorded DMARC pass for the From domain.
+    verified: bool,
+    /// The sender is on the allow list.
+    allowed: bool,
+    store: Arc<rapido_store::Store>,
+}
+
+fn ask_remote_then_open(
+    page: Rc<PageInputs>,
+    trust: Rc<SenderTrust>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let remember = Rc::new(std::cell::Cell::new(false));
     window.open_dialog(cx, move |dialog, _, cx| {
+        let theme = cx.theme().clone();
         let load = page.clone();
         let block = page.clone();
+        let (load_trust, load_remember) = (trust.clone(), remember.clone());
+        let note: Option<String> = match (&trust.sender, trust.verified, trust.allowed) {
+            (Some(s), false, true) => Some(format!(
+                "{s} is on your allow list, but this message could not be verified as really \
+                 coming from them (no DMARC pass from your mail server), so images were not \
+                 loaded automatically."
+            )),
+            (Some(s), false, false) => Some(format!(
+                "This message could not be verified as coming from {s} (no DMARC pass from \
+                 your mail server), so it can't be added to your allow list."
+            )),
+            _ => None,
+        };
+        let can_remember = trust.verified && !trust.allowed && trust.sender.is_some();
         dialog
             .title(browser_view::REMOTE_TITLE)
-            .width(px(480.))
+            .width(px(500.))
             .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(browser_view::REMOTE_MESSAGE),
+                v_flex()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(browser_view::REMOTE_MESSAGE),
+                    )
+                    .children(note.map(|n| div().text_sm().text_color(theme.warning).child(n)))
+                    .when(can_remember, |d| {
+                        let remember = remember.clone();
+                        d.child(
+                            Checkbox::new("remember-sender")
+                                .label(format!(
+                                    "Always load images from {}",
+                                    trust.sender.clone().unwrap_or_default()
+                                ))
+                                .checked(remember.get())
+                                .on_click(move |checked, window, _| {
+                                    remember.set(*checked);
+                                    window.refresh();
+                                }),
+                        )
+                    }),
             )
             .footer(
                 DialogFooter::new()
@@ -649,6 +728,12 @@ fn ask_remote_then_open(page: Rc<PageInputs>, window: &mut Window, cx: &mut App)
                             .label("Load remote images")
                             .on_click(move |_, window, cx| {
                                 window.close_dialog(cx);
+                                if load_remember.get()
+                                    && let Some(s) = &load_trust.sender
+                                    && let Err(e) = load_trust.store.allow_remote_images(s)
+                                {
+                                    tracing::warn!("could not remember {s}: {e}");
+                                }
                                 write_and_open(&load, true, window, cx);
                             }),
                     )
@@ -664,6 +749,80 @@ fn ask_remote_then_open(page: Rc<PageInputs>, window: &mut Window, cx: &mut App)
                 write_and_open(&block, false, window, cx);
                 true
             })
+    });
+}
+
+/// Show and edit the senders whose remote images load automatically.
+pub fn open_image_senders_dialog(
+    store: Arc<rapido_store::Store>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let theme = cx.theme().clone();
+        let senders = store.remote_image_senders().unwrap_or_default();
+        let body = if senders.is_empty() {
+            div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(
+                    "No senders yet. When you open a message in the browser, choose \
+                     \u{201c}Always load images from…\u{201d} to add its sender.",
+                )
+                .into_any_element()
+        } else {
+            v_flex()
+                .gap_1()
+                .children(senders.into_iter().map(|addr| {
+                    let store = store.clone();
+                    let remove = addr.clone();
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .child(addr.clone()),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("forget-{addr}")))
+                                .xsmall()
+                                .ghost()
+                                .label("Remove")
+                                .on_click(move |_, window, _| {
+                                    if let Err(e) = store.forget_remote_images(&remove) {
+                                        tracing::warn!("could not remove {remove}: {e}");
+                                    }
+                                    window.refresh();
+                                }),
+                        )
+                }))
+                .into_any_element()
+        };
+        dialog
+            .title("Senders allowed to load images")
+            .width(px(460.))
+            .child(
+                v_flex()
+                    .gap_3()
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(
+                        "Images load automatically only when the message also passes DMARC for \
+                         the sender's domain, as recorded by your mail server.",
+                    ))
+                    .child(
+                        div()
+                            .id("image-senders")
+                            .max_h(px(320.))
+                            .overflow_y_scrollbar()
+                            .child(body),
+                    ),
+            )
+            .footer(
+                DialogFooter::new()
+                    .child(DialogClose::new().trigger(|button| button.label("Done"))),
+            )
     });
 }
 
