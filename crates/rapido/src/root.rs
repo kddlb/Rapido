@@ -81,9 +81,9 @@ impl RapidoRoot {
             &view,
             window,
             |this, _, ev: &MailEvent, window, cx| match ev {
-                MailEvent::SignedOut { session_url } => {
+                MailEvent::SignedOut { session_url, error } => {
                     window.set_window_title("Rápido");
-                    this.show_setup(Some(session_url.clone()), None, window, cx)
+                    this.show_setup(Some(session_url.clone()), error.clone(), window, cx)
                 }
             },
         );

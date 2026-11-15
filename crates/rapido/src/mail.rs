@@ -16,6 +16,8 @@ use jmap_proto::mail::{MailboxRole, SearchSnippet};
 use rapido_store::{MailboxRow, PAGE_SIZE, StoreEvent, SyncEngine, ThreadRow, mailbox_tree};
 
 use crate::actions::*;
+use crate::browser_view;
+use crate::config::Config;
 use crate::format;
 use crate::reader::{ReaderView, open_reader_window};
 use crate::services::{self, Account};
@@ -23,7 +25,11 @@ use crate::services::{self, Account};
 const ROW_HEIGHT: f32 = 68.;
 
 pub enum MailEvent {
-    SignedOut { session_url: String },
+    /// `error` is set when local data could not be fully removed.
+    SignedOut {
+        session_url: String,
+        error: Option<String>,
+    },
 }
 
 /// An active search: results replace the mailbox list until cleared.
@@ -507,13 +513,34 @@ impl MailView {
         }
     }
 
-    fn sign_out(&mut self, cx: &mut Context<Self>) {
+    /// Sign out: forget the token and settings, and delete everything cached
+    /// locally for this account (database, generated browser pages).
+    fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.push.abort();
+        // Pop-out readers and source windows hold the database open; close them.
+        let this_window = window.window_handle();
+        for other in cx.windows() {
+            if other != this_window {
+                let _ = other.update(cx, |_, window, _| window.remove_window());
+            }
+        }
         let config = self.account.config.clone();
+        let account = self.engine().account().to_string();
         let session_url = config.session_url.clone();
         cx.spawn(async move |this, cx| {
-            let _ = services::blocking(move || config.forget()).await;
-            let _ = this.update(cx, |_, cx| cx.emit(MailEvent::SignedOut { session_url }));
+            let result = services::blocking(move || {
+                config.forget()?;
+                Config::remove_local_data(&account)?;
+                browser_view::cleanup();
+                Ok(())
+            })
+            .await;
+            let error = result
+                .err()
+                .map(|e| format!("Signed out, but local data could not be fully removed: {e:#}"));
+            let _ = this.update(cx, |_, cx| {
+                cx.emit(MailEvent::SignedOut { session_url, error })
+            });
         })
         .detach();
     }
@@ -653,7 +680,7 @@ impl MailView {
                             .xsmall()
                             .icon(Icon::new(Lucide::LogOut))
                             .label("Sign out")
-                            .on_click(cx.listener(|this, _, _, cx| this.sign_out(cx))),
+                            .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))),
                     ),
             )
     }

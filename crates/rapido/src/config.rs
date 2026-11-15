@@ -71,6 +71,11 @@ impl Config {
         Ok(())
     }
 
+    /// Delete an account's cached mail: the SQLite database and its WAL/SHM files.
+    pub fn remove_local_data(account: &str) -> Result<()> {
+        remove_database_files(&Self::database_path(account)?)
+    }
+
     /// Where the cache database for an account lives.
     pub fn database_path(account: &str) -> Result<PathBuf> {
         let dir = dirs()?.data_dir().to_path_buf();
@@ -89,6 +94,23 @@ impl Config {
     }
 }
 
+/// Remove a SQLite database and its `-wal` / `-shm` companions. Missing files are fine.
+fn remove_database_files(db: &std::path::Path) -> Result<()> {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut name = db.as_os_str().to_owned();
+        name.push(suffix);
+        match std::fs::remove_file(PathBuf::from(&name)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("removing {}", PathBuf::from(&name).display()));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,5 +124,28 @@ mod tests {
         };
         let s = toml::to_string_pretty(&c).unwrap();
         assert_eq!(toml::from_str::<Config>(&s).unwrap(), c);
+    }
+
+    #[test]
+    fn removes_database_and_companions() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("u1.sqlite");
+        for f in [
+            "u1.sqlite",
+            "u1.sqlite-wal",
+            "u1.sqlite-shm",
+            "other.sqlite",
+        ] {
+            std::fs::write(dir.path().join(f), "x").unwrap();
+        }
+        remove_database_files(&db).unwrap();
+        assert!(!db.exists());
+        assert!(!dir.path().join("u1.sqlite-wal").exists());
+        assert!(!dir.path().join("u1.sqlite-shm").exists());
+        assert!(
+            dir.path().join("other.sqlite").exists(),
+            "other accounts untouched"
+        );
+        remove_database_files(&db).unwrap(); // idempotent
     }
 }
