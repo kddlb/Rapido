@@ -1,0 +1,23 @@
+{
+  "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+  "methodCalls": [
+    ["Email/query", {
+      "accountId": "A1",
+      "filter": { "inMailbox": "id_of_inbox" },
+      "sort": [{ "property": "receivedAt", "isAscending": false }],
+      "collapseThreads": true,
+      "position": 0,
+      "limit": 10,
+      "calculateTotal": true
+    }, "t0"],
+    ["Email/get", {
+      "accountId": "A1",
+      "#ids": { "resultOf": "t0", "name": "Email/query", "path": "/ids" },
+      "properties": ["threadId"]
+    }, "t1"],
+    ["Thread/get", {
+      "accountId": "A1",
+      "#ids": { "resultOf": "t1", "name": "Email/get", "path": "/list/*/threadId" }
+    }, "t2"]
+  ]
+}

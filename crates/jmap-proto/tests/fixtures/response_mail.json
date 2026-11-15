@@ -1,0 +1,53 @@
+{
+  "methodResponses": [
+    ["Email/query", {
+      "accountId": "A1",
+      "queryState": "09aa9a075588-780599:0",
+      "canCalculateChanges": true,
+      "position": 0,
+      "total": 115,
+      "ids": ["Msf5a8c3e0ef4", "Mec5c8d3e9e46"]
+    }, "t0"],
+    ["Email/get", {
+      "accountId": "A1",
+      "state": "780599",
+      "list": [{
+        "id": "Msf5a8c3e0ef4",
+        "blobId": "Bd5c8a3",
+        "threadId": "T2c1a",
+        "mailboxIds": { "MB23cfa8094c0f41e6": true },
+        "keywords": { "$seen": true, "$flagged": true },
+        "size": 4321,
+        "receivedAt": "2014-10-27T13:58:06Z",
+        "from": [{ "name": "Joe Bloggs", "email": "joe@example.com" }],
+        "to": [{ "name": null, "email": "john@example.com" }],
+        "subject": "Dinner on Thursday?",
+        "sentAt": "2014-10-27T13:58:00+10:00",
+        "hasAttachment": false,
+        "preview": "Hey, do you want to go out to dinner on Thursday?",
+        "textBody": [{ "partId": "1", "blobId": "B841623871", "size": 283, "type": "text/plain", "charset": "utf-8" }],
+        "htmlBody": [{ "partId": "2", "blobId": "B319437193", "size": 1550, "type": "text/html", "charset": "utf-8" }],
+        "attachments": [],
+        "bodyValues": {
+          "1": { "isEncodingProblem": false, "isTruncated": false, "value": "Hey, do you want to go out to dinner on Thursday?" }
+        }
+      }],
+      "notFound": ["Mec5c8d3e9e46"]
+    }, "t1"],
+    ["Thread/get", {
+      "accountId": "A1",
+      "state": "f123u4",
+      "list": [{ "id": "T2c1a", "emailIds": ["Msf5a8c3e0ef4", "Me1f9a8b3"] }],
+      "notFound": []
+    }, "t2"],
+    ["error", { "type": "cannotCalculateChanges" }, "t3"],
+    ["Email/set", {
+      "accountId": "A1",
+      "oldState": "780599",
+      "newState": "780600",
+      "updated": { "Msf5a8c3e0ef4": null },
+      "notUpdated": { "Mec5c8d3e9e46": { "type": "notFound" } }
+    }, "t4"]
+  ],
+  "sessionState": "75128aab4b1b"
+}

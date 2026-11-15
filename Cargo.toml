@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+jmap-proto = { path = "crates/jmap-proto" }
+jmap-http = { path = "crates/jmap-http" }
+rapido-store = { path = "crates/rapido-store" }
+gpui-kit = "0.9.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset", "json", "stream", "system-proxy"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+futures = "0.3"
+bytes = "1"
+wiremock = "0.6"
+rusqlite = { version = "0.43", features = ["bundled"] }

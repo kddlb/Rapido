@@ -1,0 +1,7 @@
+{
+  "accountId": "A1",
+  "oldQueryState": "09aa9a075588-780599:0",
+  "newQueryState": "09aa9a075588-780601:0",
+  "removed": ["Me8de6c9f6de198239b982ea2"],
+  "added": [{ "id": "Mb3b2a3d8e9c0e8b17", "index": 0 }]
+}

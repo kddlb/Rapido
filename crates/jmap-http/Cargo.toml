@@ -1,0 +1,19 @@
+[package]
+name = "jmap-http"
+version.workspace = true
+edition.workspace = true
+description = "JMAP HTTP transport: auth, session, batched requests, blobs, push"
+
+[dependencies]
+jmap-proto.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+futures.workspace = true
+bytes.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+wiremock.workspace = true
