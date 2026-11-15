@@ -35,6 +35,8 @@ pub struct FakeState {
     pub set_calls: usize,
     /// Answer every API request with HTTP 503.
     pub unavailable: bool,
+    pub push_mode: PushMode,
+    pub push_connections: usize,
 }
 
 impl FakeState {
@@ -265,6 +267,42 @@ fn eval_path(v: &Value, path: &str) -> Value {
     walk(v, &segs)
 }
 
+/// How the fake EventSource endpoint answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PushMode {
+    /// 200 with one state-change event, then the stream ends.
+    #[default]
+    Ok,
+    Unavailable,
+    Unauthorized,
+}
+
+#[derive(Clone)]
+struct EventsResponder {
+    fake: FakeJmap,
+}
+
+impl Respond for EventsResponder {
+    fn respond(&self, _: &Request) -> ResponseTemplate {
+        let mut st = self.fake.state.lock().unwrap();
+        st.push_connections += 1;
+        match st.push_mode {
+            PushMode::Unavailable => ResponseTemplate::new(503),
+            PushMode::Unauthorized => ResponseTemplate::new(401),
+            PushMode::Ok => {
+                let body = format!(
+                    "event: ping\ndata: {{\"interval\":60}}\n\n\
+                     event: state\ndata: {{\"@type\":\"StateChange\",\"changed\":{{\"A1\":{{\"Email\":\"{}\",\"Mailbox\":\"{}\"}}}}}}\n\n",
+                    st.email_state, st.mailbox_state
+                );
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body)
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct FakeJmap {
     pub state: Arc<Mutex<FakeState>>,
@@ -304,6 +342,11 @@ impl FakeJmap {
         Mock::given(method("POST"))
             .and(path("/api/"))
             .respond_with(fake.clone())
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/events"))
+            .respond_with(EventsResponder { fake: fake.clone() })
             .mount(&server)
             .await;
         Mock::given(method("GET"))

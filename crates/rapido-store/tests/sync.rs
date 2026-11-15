@@ -5,7 +5,7 @@ use std::sync::Arc;
 use jmap_http::{JmapClient, TokenAuth};
 use jmap_proto::Id;
 use rapido_store::*;
-use support::FakeJmap;
+use support::{FakeJmap, PushMode};
 
 async fn setup() -> (wiremock::MockServer, FakeJmap, SyncEngine) {
     let (server, fake) = FakeJmap::start().await;
@@ -305,4 +305,73 @@ async fn headers_and_raw_source() {
     assert!(headers[0].value.contains("\r\n\tby"), "raw folding kept");
     let raw = engine.raw_message(&"m1".into()).await.unwrap();
     assert!(raw.starts_with(b"From: x@example.com"));
+}
+
+/// Wait (up to `secs`) for an event matching `pred`.
+async fn wait_for(
+    rx: &mut tokio::sync::broadcast::Receiver<StoreEvent>,
+    secs: u64,
+    pred: impl Fn(&StoreEvent) -> bool,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Ok(ev)) if pred(&ev) => return true,
+            Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            _ => return false,
+        }
+    }
+}
+
+#[tokio::test]
+async fn push_loop_syncs_reconnects_and_recovers() {
+    let (_s, fake, engine) = setup().await;
+    engine.sync_mailboxes().await.unwrap();
+    engine.load_mailbox(&inbox(), 0, PAGE_SIZE).await.unwrap();
+    let engine = Arc::new(engine);
+    let mut rx = engine.subscribe();
+
+    // Start offline: the server refuses the push connection.
+    fake.with(|s| s.push_mode = PushMode::Unavailable);
+    let task = tokio::spawn(engine.clone().run_push());
+    assert!(
+        wait_for(&mut rx, 3, |e| *e == StoreEvent::Offline).await,
+        "goes offline"
+    );
+
+    // New mail arrives while we are disconnected; the server comes back.
+    fake.with(|s| {
+        s.add_email("m9", "t9", "inbox", 9, false);
+        s.push_mode = PushMode::Ok;
+    });
+    assert!(
+        wait_for(&mut rx, 5, |e| *e == StoreEvent::Online).await,
+        "reconnects after backoff"
+    );
+    assert!(
+        wait_for(&mut rx, 5, |e| *e == StoreEvent::ListChanged(inbox())).await,
+        "catches up on reconnect"
+    );
+    assert_eq!(list_ids(&engine, &inbox())[0], "m9");
+
+    // The fake stream ends after one event, so the loop reconnects again.
+    assert!(wait_for(&mut rx, 5, |e| *e == StoreEvent::Offline).await);
+    assert!(wait_for(&mut rx, 5, |e| *e == StoreEvent::Online).await);
+    assert!(fake.with(|s| s.push_connections) >= 3);
+    task.abort();
+}
+
+#[tokio::test]
+async fn push_loop_stops_on_auth_failure() {
+    let (_s, fake, engine) = setup().await;
+    let engine = Arc::new(engine);
+    let mut rx = engine.subscribe();
+    fake.with(|s| s.push_mode = PushMode::Unauthorized);
+    let task = tokio::spawn(engine.clone().run_push());
+    assert!(wait_for(&mut rx, 3, |e| *e == StoreEvent::AuthFailed).await);
+    tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .expect("run_push returns after auth failure")
+        .unwrap();
+    assert_eq!(fake.with(|s| s.push_connections), 1);
 }
